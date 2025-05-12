@@ -6,15 +6,15 @@ import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public class EcommerceProducer {
     private static final String HOST = "localhost";
     private static final String PURCHASE_DIRECT_EXCHANGE = "compra_directa";
-    private static final String PRODUCTS_TOPIC_EXCHANGE = "productos_topic";
+    private static final String PRODUCTS_FANOUT_EXCHANGE = "productos_fanout";
     private static final String OFFERS_FANOUT_EXCHANGE = "ofertas_fanout";
     private static final String QUEUE_PURCHASES = "cola_compras";
-    private static final String QUEUE_PRODUCTS = "cola_productos";
     private static final String QUEUE_OFFERS = "cola_ofertas";
 
     private JFrame frame;
@@ -85,21 +85,20 @@ public class EcommerceProducer {
         connection = factory.newConnection();
         channel = connection.createChannel();
 
+        // Declara exchanges
         channel.exchangeDeclare(PURCHASE_DIRECT_EXCHANGE, BuiltinExchangeType.DIRECT, true);
-        channel.exchangeDeclare(PRODUCTS_TOPIC_EXCHANGE, BuiltinExchangeType.TOPIC, true);
+        channel.exchangeDeclare(PRODUCTS_FANOUT_EXCHANGE, BuiltinExchangeType.FANOUT, true);
         channel.exchangeDeclare(OFFERS_FANOUT_EXCHANGE, BuiltinExchangeType.FANOUT, true);
 
+        // Cola de compras (direct)
         channel.queueDeclare(QUEUE_PURCHASES, true, false, false, null);
         channel.queueBind(QUEUE_PURCHASES, PURCHASE_DIRECT_EXCHANGE, "compra");
 
-        channel.queueDeclare(QUEUE_PRODUCTS, true, false, false, null);
-        channel.queueBind(QUEUE_PRODUCTS, PRODUCTS_TOPIC_EXCHANGE, "producto.*");
-
+        // Cola de ofertas (fanout)
         channel.queueDeclare(QUEUE_OFFERS, true, false, false, null);
         channel.queueBind(QUEUE_OFFERS, OFFERS_FANOUT_EXCHANGE, "");
 
         log("RabbitMQ setup: exchanges y colas declarados");
-        // console log
         System.out.println("[Producer] RabbitMQ initialized: exchanges and queues declared");
     }
 
@@ -108,7 +107,6 @@ public class EcommerceProducer {
             channel.basicConsume(QUEUE_PURCHASES, true, new DefaultConsumer(channel) {
                 @Override public void handleDelivery(String tag, Envelope env, AMQP.BasicProperties props, byte[] body) throws IOException {
                     String compra = new String(body, StandardCharsets.UTF_8);
-                    // Console log
                     System.out.println("[Producer Consumer] Compra recibida en producer: " + compra);
                     SwingUtilities.invokeLater(() -> log("Compra recibida: " + compra));
                 }
@@ -121,24 +119,32 @@ public class EcommerceProducer {
 
     private void publishProduct(ActionEvent e) {
         try {
-            String nombre = txtName.getText(), categoria = cbCategory.getSelectedItem().toString();
-            String fecha = txtDate.getText(), marca = txtBrand.getText();
-            String seccion = cbSection.getSelectedItem().toString(), precio = txtPrice.getText();
+            String nombre = txtName.getText();
+            String categoria = cbCategory.getSelectedItem().toString();
+            String fecha = txtDate.getText();
+            String marca = txtBrand.getText();
+            String seccion = cbSection.getSelectedItem().toString();
+            String precio = txtPrice.getText();
             String stock = txtStock.getText();
             if(nombre.isEmpty()||fecha.isEmpty()||marca.isEmpty()||precio.isEmpty()||stock.isEmpty()){
                 JOptionPane.showMessageDialog(frame,"Todos los campos son obligatorios","Error",JOptionPane.ERROR_MESSAGE);
                 return;
             }
             Map<String,String> prod = new LinkedHashMap<>();
-            prod.put("nombre",nombre); prod.put("categoria",categoria);
-            prod.put("fecha_publicacion",fecha); prod.put("marca",marca);
-            prod.put("seccion",seccion); prod.put("precio",precio); prod.put("stock",stock);
+            prod.put("nombre",nombre);
+            prod.put("categoria",categoria);
+            prod.put("fecha_publicacion",fecha);
+            prod.put("marca",marca);
+            prod.put("seccion",seccion);
+            prod.put("precio",precio);
+            prod.put("stock",stock);
             String msg = mapToString(prod);
-            channel.basicPublish(PRODUCTS_TOPIC_EXCHANGE, "producto."+categoria.toLowerCase(), null, msg.getBytes(StandardCharsets.UTF_8));
+
+            // Publicar en exchange fanout de productos
+            channel.basicPublish(PRODUCTS_FANOUT_EXCHANGE, "", null, msg.getBytes(StandardCharsets.UTF_8));
             log("Producto publicado: " + nombre);
-            // Console log
-            System.out.println(String.format("[Producer] Enviado a exchange '%s' con routingKey 'producto.%s': %s", 
-                PRODUCTS_TOPIC_EXCHANGE, categoria.toLowerCase(), msg));
+            System.out.println(String.format("[Producer] Enviado a exchange '%s': %s",
+                PRODUCTS_FANOUT_EXCHANGE, msg));
         } catch (Exception ex) {
             log("Error al publicar producto: "+ex.getMessage());
             System.err.println("[Producer] Error publishing product: " + ex.getMessage());
@@ -154,8 +160,7 @@ public class EcommerceProducer {
         try {
             channel.basicPublish(OFFERS_FANOUT_EXCHANGE, "", null, oferta.getBytes(StandardCharsets.UTF_8));
             log("Oferta enviada: " + oferta);
-            // Console log
-            System.out.println(String.format("[Producer] Enviado a exchange '%s' con routingKey '': %s", 
+            System.out.println(String.format("[Producer] Enviado a exchange '%s': %s",
                 OFFERS_FANOUT_EXCHANGE, oferta));
             txtOffer.setText("");
         } catch (IOException ex) {

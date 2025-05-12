@@ -10,11 +10,10 @@ import java.util.*;
 
 public class EcommerceConsumer {
     private static final String HOST = "localhost";
-    private static final String PRODUCTO_DIRECT_EXCHANGE = "compra_directa";
-    private static final String PRODUCTOS_TOPIC_EXCHANGE = "productos_topic";
-    private static final String OFERTAS_FANOUT_EXCHANGE = "ofertas_fanout";
-    private static final String COLA_COMPRAS = "cola_compras";
-    private static final String COLA_PRODUCTOS = "cola_productos";
+    private static final String PURCHASE_DIRECT_EXCHANGE = "compra_directa";
+    private static final String PRODUCTS_FANOUT_EXCHANGE = "productos_fanout";
+    private static final String OFFERS_FANOUT_EXCHANGE = "ofertas_fanout";
+    private static final String QUEUE_PURCHASES = "cola_compras";
 
     private JFrame frame;
     private DefaultListModel<String> listModelProductos;
@@ -28,14 +27,16 @@ public class EcommerceConsumer {
     private final Map<String, Map<String, String>> productos = new LinkedHashMap<>();
     private final Map<String, Integer> stockActual = new HashMap<>();
     private Channel channel;
+    private String queueProductos;
+    private String queueOffers;
 
     public static void main(String[] args) {
         EventQueue.invokeLater(() -> {
             try {
-                EcommerceConsumer window = new EcommerceConsumer();
-                window.frame.setVisible(true);
-                window.setupRabbitMQ();
-                window.iniciarConsumidores();
+                EcommerceConsumer consumer = new EcommerceConsumer();
+                consumer.frame.setVisible(true);
+                consumer.setupRabbitMQ();
+                consumer.iniciarConsumidores();
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -52,7 +53,7 @@ public class EcommerceConsumer {
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.getContentPane().setLayout(new BorderLayout(10, 10));
 
-        // Productos disponible
+        // Panel Productos
         JPanel panelIzq = new JPanel(new BorderLayout());
         panelIzq.setBorder(BorderFactory.createTitledBorder("Productos Disponibles"));
         listModelProductos = new DefaultListModel<>();
@@ -62,7 +63,7 @@ public class EcommerceConsumer {
         panelIzq.add(new JScrollPane(listProductos), BorderLayout.CENTER);
         frame.getContentPane().add(panelIzq, BorderLayout.WEST);
 
-        // Detalles y compra
+        // Panel Detalles y Compra
         JPanel panelCentro = new JPanel(new BorderLayout());
         txtDetallesProducto = new JTextArea(10, 30);
         txtDetallesProducto.setEditable(false);
@@ -74,7 +75,7 @@ public class EcommerceConsumer {
         panelCompra.setBorder(BorderFactory.createTitledBorder("Datos de Compra"));
         panelCompra.add(new JLabel("Nombre del Cliente:"));
         txtNombreCliente = new JTextField(); panelCompra.add(txtNombreCliente);
-        panelCompra.add(new JLabel("Cantidad disponible:"));
+        panelCompra.add(new JLabel("Cantidad a comprar:"));
         cbCantidad = new JComboBox<>(); panelCompra.add(cbCantidad);
         JButton btnComprar = new JButton("Comprar Producto");
         btnComprar.addActionListener(this::comprarProducto);
@@ -82,7 +83,7 @@ public class EcommerceConsumer {
         panelCentro.add(panelCompra, BorderLayout.SOUTH);
         frame.getContentPane().add(panelCentro, BorderLayout.CENTER);
 
-        // Ofertas (opcional)
+        // Panel Ofertas
         JPanel panelDer = new JPanel(new BorderLayout());
         panelDer.setBorder(BorderFactory.createTitledBorder("Ofertas"));
         txtOfertas = new JTextArea(10, 20);
@@ -90,7 +91,7 @@ public class EcommerceConsumer {
         panelDer.add(new JScrollPane(txtOfertas), BorderLayout.CENTER);
         frame.getContentPane().add(panelDer, BorderLayout.EAST);
 
-        // Log UI
+        // Log
         logArea = new JTextArea();
         logArea.setEditable(false);
         frame.getContentPane().add(new JScrollPane(logArea), BorderLayout.SOUTH);
@@ -102,55 +103,63 @@ public class EcommerceConsumer {
         Connection connection = factory.newConnection();
         channel = connection.createChannel();
 
-        // Exchange y cola para compras
-        channel.exchangeDeclare(PRODUCTO_DIRECT_EXCHANGE, BuiltinExchangeType.DIRECT, true);
-        channel.queueDeclare(COLA_COMPRAS, true, false, false, null);
-        channel.queueBind(COLA_COMPRAS, PRODUCTO_DIRECT_EXCHANGE, "compra");
-        System.out.println("[Consumer] Cola de compras '" + COLA_COMPRAS + "' lista");
+        // Exchange compras
+        channel.exchangeDeclare(PURCHASE_DIRECT_EXCHANGE, BuiltinExchangeType.DIRECT, true);
+        channel.queueDeclare(QUEUE_PURCHASES, true, false, false, null);
+        channel.queueBind(QUEUE_PURCHASES, PURCHASE_DIRECT_EXCHANGE, "compra");
+        System.out.println("[Consumer] Cola compras: " + QUEUE_PURCHASES);
 
-        // Exchange y cola para productos
-        channel.exchangeDeclare(PRODUCTOS_TOPIC_EXCHANGE, BuiltinExchangeType.TOPIC, true);
-        channel.queueDeclare(COLA_PRODUCTOS, true, false, false, null);
-        channel.queueBind(COLA_PRODUCTOS, PRODUCTOS_TOPIC_EXCHANGE, "producto.*");
-        System.out.println("[Consumer] Cola de productos '" + COLA_PRODUCTOS + "' lista");
+        // Exchange productos fanout
+        channel.exchangeDeclare(PRODUCTS_FANOUT_EXCHANGE, BuiltinExchangeType.FANOUT, true);
+        queueProductos = channel.queueDeclare().getQueue();
+        channel.queueBind(queueProductos, PRODUCTS_FANOUT_EXCHANGE, "");
+        System.out.println("[Consumer] Cola productos (anónima): " + queueProductos);
 
-        // Opcional: ofertas
-        channel.exchangeDeclare(OFERTAS_FANOUT_EXCHANGE, BuiltinExchangeType.FANOUT, true);
-        String queueOffers = channel.queueDeclare().getQueue();
-        channel.queueBind(queueOffers, OFERTAS_FANOUT_EXCHANGE, "");
-        System.out.println("[Consumer] Cola anónima de ofertas lista");
+        // Exchange ofertas fanout
+        channel.exchangeDeclare(OFFERS_FANOUT_EXCHANGE, BuiltinExchangeType.FANOUT, true);
+        queueOffers = channel.queueDeclare().getQueue();
+        channel.queueBind(queueOffers, OFFERS_FANOUT_EXCHANGE, "");
+        System.out.println("[Consumer] Cola ofertas (anónima): " + queueOffers);
 
-        log("RabbitMQ configurado: compras y productos listos");
+        log("RabbitMQ configurado: compras, productos y ofertas listos");
     }
 
     private void iniciarConsumidores() {
         try {
-            // Consumidor de compras
-            channel.basicConsume(COLA_COMPRAS, true, new DefaultConsumer(channel) {
-                @Override
-                public void handleDelivery(String consumerTag, Envelope envelope,
-                                           AMQP.BasicProperties properties, byte[] body) throws IOException {
+            // Consumidor compras
+            channel.basicConsume(QUEUE_PURCHASES, true, new DefaultConsumer(channel) {
+                @Override public void handleDelivery(String consumerTag, Envelope envelope,
+                                                      AMQP.BasicProperties props, byte[] body) throws IOException {
                     String compra = new String(body, StandardCharsets.UTF_8);
                     System.out.println("[Compra] " + compra);
                     SwingUtilities.invokeLater(() -> log("Compra registrada: " + compra));
                 }
             });
 
-            // Consumidor de productos
-            channel.basicConsume(COLA_PRODUCTOS, true, new DefaultConsumer(channel) {
-                @Override
-                public void handleDelivery(String consumerTag, Envelope envelope,
-                                           AMQP.BasicProperties properties, byte[] body) throws IOException {
+            // Consumidor productos
+            channel.basicConsume(queueProductos, true, new DefaultConsumer(channel) {
+                @Override public void handleDelivery(String consumerTag, Envelope envelope,
+                                                      AMQP.BasicProperties props, byte[] body) throws IOException {
                     String msg = new String(body, StandardCharsets.UTF_8);
                     System.out.println("[Producto] " + msg);
                     SwingUtilities.invokeLater(() -> procesarNuevoProducto(msg));
                 }
             });
 
-            log("Consumidores iniciados. Esperando compras y productos...");
-        } catch (Exception e) {
+            // Consumidor ofertas
+            channel.basicConsume(queueOffers, true, new DefaultConsumer(channel) {
+                @Override public void handleDelivery(String consumerTag, Envelope envelope,
+                                                      AMQP.BasicProperties props, byte[] body) throws IOException {
+                    String oferta = new String(body, StandardCharsets.UTF_8);
+                    System.out.println("[Oferta] " + oferta);
+                    SwingUtilities.invokeLater(() -> txtOfertas.append("Oferta recibida: " + oferta + "\n"));
+                }
+            });
+
+            log("Consumidores iniciados. Esperando compras, productos y ofertas...");
+        } catch (IOException e) {
             log("Error iniciando consumidores: " + e.getMessage());
-            System.err.println("[Consumer] ERROR: " + e.getMessage());
+            System.err.println("[Consumer] Error: " + e.getMessage());
         }
     }
 
@@ -193,7 +202,7 @@ public class EcommerceConsumer {
         }
         try {
             String msg = nombre + ":" + cantidad + ";cliente:" + cliente;
-            channel.basicPublish(PRODUCTO_DIRECT_EXCHANGE, "compra", null, msg.getBytes(StandardCharsets.UTF_8));
+            channel.basicPublish(PURCHASE_DIRECT_EXCHANGE, "compra", null, msg.getBytes(StandardCharsets.UTF_8));
             System.out.println("[Enviado Compra] " + msg);
             int restante = stockActual.get(nombre) - Integer.parseInt(cantidad);
             stockActual.put(nombre, restante);
@@ -209,7 +218,8 @@ public class EcommerceConsumer {
     private Map<String, String> stringToMap(String str) {
         Map<String, String> map = new HashMap<>();
         for (String entry : str.split(";")) {
-            String[] kv = entry.split(":"); if (kv.length == 2) map.put(kv[0], kv[1]);
+            String[] kv = entry.split(":");
+            if (kv.length == 2) map.put(kv[0], kv[1]);
         }
         return map;
     }
