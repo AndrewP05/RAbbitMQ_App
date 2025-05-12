@@ -12,8 +12,9 @@ public class EcommerceConsumer {
     private static final String HOST = "localhost";
     private static final String PURCHASE_DIRECT_EXCHANGE = "compra_directa";
     private static final String PRODUCTS_FANOUT_EXCHANGE = "productos_fanout";
-    private static final String OFFERS_FANOUT_EXCHANGE = "ofertas_fanout";
-    private static final String QUEUE_PURCHASES = "cola_compras";
+    private static final String OFFERS_FANOUT_EXCHANGE   = "ofertas_fanout";
+    private static final String STOCK_TOPIC_EXCHANGE    = "stock_topic";
+    private static final String QUEUE_PURCHASES         = "cola_compras";
 
     private JFrame frame;
     private DefaultListModel<String> listModelProductos;
@@ -25,10 +26,9 @@ public class EcommerceConsumer {
     private JTextField txtNombreCliente;
 
     private final Map<String, Map<String, String>> productos = new LinkedHashMap<>();
-    private final Map<String, Integer> stockActual = new HashMap<>();
+    private final Map<String, Integer> stockActual         = new HashMap<>();
     private Channel channel;
-    private String queueProductos;
-    private String queueOffers;
+    private String queueProductos, queueOffers, queueStock;
 
     public static void main(String[] args) {
         EventQueue.invokeLater(() -> {
@@ -53,17 +53,15 @@ public class EcommerceConsumer {
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.getContentPane().setLayout(new BorderLayout(10, 10));
 
-        // Panel Productos
         JPanel panelIzq = new JPanel(new BorderLayout());
         panelIzq.setBorder(BorderFactory.createTitledBorder("Productos Disponibles"));
         listModelProductos = new DefaultListModel<>();
-        listProductos = new JList<>(listModelProductos);
+        listProductos      = new JList<>(listModelProductos);
         listProductos.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         listProductos.addListSelectionListener(evt -> mostrarDetallesProducto());
         panelIzq.add(new JScrollPane(listProductos), BorderLayout.CENTER);
         frame.getContentPane().add(panelIzq, BorderLayout.WEST);
 
-        // Panel Detalles y Compra
         JPanel panelCentro = new JPanel(new BorderLayout());
         txtDetallesProducto = new JTextArea(10, 30);
         txtDetallesProducto.setEditable(false);
@@ -83,7 +81,6 @@ public class EcommerceConsumer {
         panelCentro.add(panelCompra, BorderLayout.SOUTH);
         frame.getContentPane().add(panelCentro, BorderLayout.CENTER);
 
-        // Panel Ofertas
         JPanel panelDer = new JPanel(new BorderLayout());
         panelDer.setBorder(BorderFactory.createTitledBorder("Ofertas"));
         txtOfertas = new JTextArea(10, 20);
@@ -91,7 +88,6 @@ public class EcommerceConsumer {
         panelDer.add(new JScrollPane(txtOfertas), BorderLayout.CENTER);
         frame.getContentPane().add(panelDer, BorderLayout.EAST);
 
-        // Log
         logArea = new JTextArea();
         logArea.setEditable(false);
         frame.getContentPane().add(new JScrollPane(logArea), BorderLayout.SOUTH);
@@ -103,7 +99,7 @@ public class EcommerceConsumer {
         Connection connection = factory.newConnection();
         channel = connection.createChannel();
 
-        // Exchange compras
+        // Exchange compras (direct)
         channel.exchangeDeclare(PURCHASE_DIRECT_EXCHANGE, BuiltinExchangeType.DIRECT, true);
         channel.queueDeclare(QUEUE_PURCHASES, true, false, false, null);
         channel.queueBind(QUEUE_PURCHASES, PURCHASE_DIRECT_EXCHANGE, "compra");
@@ -121,45 +117,63 @@ public class EcommerceConsumer {
         channel.queueBind(queueOffers, OFFERS_FANOUT_EXCHANGE, "");
         System.out.println("[Consumer] Cola ofertas (anónima): " + queueOffers);
 
-        log("RabbitMQ configurado: compras, productos y ofertas listos");
+        // Exchange stock (topic)
+        channel.exchangeDeclare(STOCK_TOPIC_EXCHANGE, BuiltinExchangeType.TOPIC, true);
+        queueStock = channel.queueDeclare().getQueue();
+        channel.queueBind(queueStock, STOCK_TOPIC_EXCHANGE, "stock.*");
+        System.out.println("[Consumer] Cola stock (anónima): " + queueStock);
+
+        log("RabbitMQ configurado: compras, productos, ofertas y stock listos");
     }
 
     private void iniciarConsumidores() {
         try {
-            // Consumidor compras
+            // Compras: envía al backend, no se propaga aquí
             channel.basicConsume(QUEUE_PURCHASES, true, new DefaultConsumer(channel) {
-                @Override public void handleDelivery(String consumerTag, Envelope envelope,
-                                                      AMQP.BasicProperties props, byte[] body) throws IOException {
-                    String compra = new String(body, StandardCharsets.UTF_8);
-                    System.out.println("[Compra] " + compra);
-                    SwingUtilities.invokeLater(() -> log("Compra registrada: " + compra));
+                @Override public void handleDelivery(String tag, Envelope env,
+                                                     AMQP.BasicProperties props, byte[] body) throws IOException {
+                    // No procesamos aquí; compras solo registradas en backend
                 }
             });
 
-            // Consumidor productos
+            // Productos
             channel.basicConsume(queueProductos, true, new DefaultConsumer(channel) {
-                @Override public void handleDelivery(String consumerTag, Envelope envelope,
-                                                      AMQP.BasicProperties props, byte[] body) throws IOException {
+                @Override public void handleDelivery(String tag, Envelope env,
+                                                     AMQP.BasicProperties props, byte[] body) throws IOException {
                     String msg = new String(body, StandardCharsets.UTF_8);
-                    System.out.println("[Producto] " + msg);
                     SwingUtilities.invokeLater(() -> procesarNuevoProducto(msg));
                 }
             });
 
-            // Consumidor ofertas
+            // Ofertas
             channel.basicConsume(queueOffers, true, new DefaultConsumer(channel) {
-                @Override public void handleDelivery(String consumerTag, Envelope envelope,
-                                                      AMQP.BasicProperties props, byte[] body) throws IOException {
+                @Override public void handleDelivery(String tag, Envelope env,
+                                                     AMQP.BasicProperties props, byte[] body) throws IOException {
                     String oferta = new String(body, StandardCharsets.UTF_8);
-                    System.out.println("[Oferta] " + oferta);
-                    SwingUtilities.invokeLater(() -> txtOfertas.append("Oferta recibida: " + oferta + "\n"));
+                    SwingUtilities.invokeLater(() -> txtOfertas.append("Oferta: " + oferta + "\n"));
                 }
             });
 
-            log("Consumidores iniciados. Esperando compras, productos y ofertas...");
+            // Stock updates
+            channel.basicConsume(queueStock, true, new DefaultConsumer(channel) {
+                @Override public void handleDelivery(String tag, Envelope env,
+                                                     AMQP.BasicProperties props, byte[] body) throws IOException {
+                    String msg = new String(body, StandardCharsets.UTF_8);
+                    Map<String,String> data = stringToMap(msg);
+                    String nombre = data.get("nombre");
+                    int nuevoStock = Integer.parseInt(data.getOrDefault("stock", "0"));
+                    stockActual.put(nombre, nuevoStock);
+                    SwingUtilities.invokeLater(() -> {
+                        log("Stock actualizado: " + nombre + " = " + nuevoStock);
+                        if (nombre.equals(listProductos.getSelectedValue())) mostrarDetallesProducto();
+                    });
+                }
+            });
+
+            log("Consumidores iniciados. Esperando eventos...");
         } catch (IOException e) {
             log("Error iniciando consumidores: " + e.getMessage());
-            System.err.println("[Consumer] Error: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -172,7 +186,7 @@ public class EcommerceConsumer {
             stockActual.put(nombre, stock);
             SwingUtilities.invokeLater(() -> {
                 if (!listModelProductos.contains(nombre)) listModelProductos.addElement(nombre);
-                log("Producto actualizado: " + nombre);
+                log("Producto agregado/actualizado: " + nombre);
             });
         }
     }
@@ -180,7 +194,7 @@ public class EcommerceConsumer {
     private void mostrarDetallesProducto() {
         String nombre = listProductos.getSelectedValue();
         if (nombre != null && productos.containsKey(nombre)) {
-            Map<String, String> p = productos.get(nombre);
+            Map<String,String> p = productos.get(nombre);
             int stock = stockActual.getOrDefault(nombre, 0);
             String det = String.format(
                 "Nombre: %s\nCategoría: %s\nFecha: %s\nMarca: %s\nSección: %s\nPrecio: $%s\nStock: %d",
@@ -193,31 +207,37 @@ public class EcommerceConsumer {
     }
 
     private void comprarProducto(ActionEvent e) {
-        String nombre = listProductos.getSelectedValue();
+        String nombre   = listProductos.getSelectedValue();
         String cantidad = (String) cbCantidad.getSelectedItem();
-        String cliente = txtNombreCliente.getText();
+        String cliente  = txtNombreCliente.getText();
         if (nombre == null || cantidad == null || cliente.isEmpty()) {
             JOptionPane.showMessageDialog(frame, "Complete todos los campos", "Error", JOptionPane.ERROR_MESSAGE);
             return;
         }
         try {
-            String msg = nombre + ":" + cantidad + ";cliente:" + cliente;
-            channel.basicPublish(PURCHASE_DIRECT_EXCHANGE, "compra", null, msg.getBytes(StandardCharsets.UTF_8));
-            System.out.println("[Enviado Compra] " + msg);
+            // Publica compra solo al backend (direct)
+            String compraMsg = String.format("nombre:%s;stock:%s;cliente:%s;", nombre, cantidad, cliente);
+            channel.basicPublish(PURCHASE_DIRECT_EXCHANGE, "compra", null, compraMsg.getBytes(StandardCharsets.UTF_8));
+            log("Compra enviada: " + compraMsg);
+
+            // Publica actualización de stock (topic) para otros consumidores
             int restante = stockActual.get(nombre) - Integer.parseInt(cantidad);
             stockActual.put(nombre, restante);
+            String stockMsg = String.format("nombre:%s;stock:%d;", nombre, restante);
+            channel.basicPublish(STOCK_TOPIC_EXCHANGE, "stock." + nombre, null, stockMsg.getBytes(StandardCharsets.UTF_8));
+
+            // Refresca UI local
             mostrarDetallesProducto();
             txtNombreCliente.setText("");
-            log("Compra enviada: " + msg);
         } catch (IOException ex) {
             log("Error al enviar compra: " + ex.getMessage());
-            System.err.println("[ERROR Enviar Compra] " + ex.getMessage());
+            ex.printStackTrace();
         }
     }
 
-    private Map<String, String> stringToMap(String str) {
-        Map<String, String> map = new HashMap<>();
-        for (String entry : str.split(";")) {
+    private Map<String,String> stringToMap(String str) {
+        Map<String,String> map = new HashMap<>();
+        for (String entry: str.split(";")) {
             String[] kv = entry.split(":");
             if (kv.length == 2) map.put(kv[0], kv[1]);
         }
