@@ -10,9 +10,9 @@ import java.util.*;
 
 public class EcommerceProducer {
     private static final String HOST = "localhost";
-    private static final String PURCHASE_DIRECT_EXCHANGE = "compra_directa";  // exchange solo para compras
-    private static final String PRODUCTS_TOPIC_EXCHANGE = "productos_topic"; // exchange para nuevas publicaciones
-    private static final String OFFERS_FANOUT_EXCHANGE = "ofertas_fanout";   // exchange para ofertas
+    private static final String PURCHASE_DIRECT_EXCHANGE = "compra_directa";
+    private static final String PRODUCTS_TOPIC_EXCHANGE = "productos_topic";
+    private static final String OFFERS_FANOUT_EXCHANGE = "ofertas_fanout";
     private static final String QUEUE_PURCHASES = "cola_compras";
     private static final String QUEUE_PRODUCTS = "cola_productos";
     private static final String QUEUE_OFFERS = "cola_ofertas";
@@ -85,24 +85,22 @@ public class EcommerceProducer {
         connection = factory.newConnection();
         channel = connection.createChannel();
 
-        // declaramos solo tres exchanges
-        channel.exchangeDeclare(PURCHASE_DIRECT_EXCHANGE, "direct", true);
-        channel.exchangeDeclare(PRODUCTS_TOPIC_EXCHANGE, "topic", true);
-        channel.exchangeDeclare(OFFERS_FANOUT_EXCHANGE, "fanout", true);
+        channel.exchangeDeclare(PURCHASE_DIRECT_EXCHANGE, BuiltinExchangeType.DIRECT, true);
+        channel.exchangeDeclare(PRODUCTS_TOPIC_EXCHANGE, BuiltinExchangeType.TOPIC, true);
+        channel.exchangeDeclare(OFFERS_FANOUT_EXCHANGE, BuiltinExchangeType.FANOUT, true);
 
-        // cola para compras (producer consumirá aquí)
         channel.queueDeclare(QUEUE_PURCHASES, true, false, false, null);
         channel.queueBind(QUEUE_PURCHASES, PURCHASE_DIRECT_EXCHANGE, "compra");
 
-        // cola para visualizar publicaciones
         channel.queueDeclare(QUEUE_PRODUCTS, true, false, false, null);
         channel.queueBind(QUEUE_PRODUCTS, PRODUCTS_TOPIC_EXCHANGE, "producto.*");
 
-        // cola para ofertas
         channel.queueDeclare(QUEUE_OFFERS, true, false, false, null);
         channel.queueBind(QUEUE_OFFERS, OFFERS_FANOUT_EXCHANGE, "");
 
         log("RabbitMQ setup: exchanges y colas declarados");
+        // console log
+        System.out.println("[Producer] RabbitMQ initialized: exchanges and queues declared");
     }
 
     private void startPurchaseConsumer() {
@@ -110,11 +108,14 @@ public class EcommerceProducer {
             channel.basicConsume(QUEUE_PURCHASES, true, new DefaultConsumer(channel) {
                 @Override public void handleDelivery(String tag, Envelope env, AMQP.BasicProperties props, byte[] body) throws IOException {
                     String compra = new String(body, StandardCharsets.UTF_8);
+                    // Console log
+                    System.out.println("[Producer Consumer] Compra recibida en producer: " + compra);
                     SwingUtilities.invokeLater(() -> log("Compra recibida: " + compra));
                 }
             });
         } catch (IOException e) {
             log("Error al consumir compras: "+e.getMessage());
+            System.err.println("[Producer Consumer] Error consuming purchases: " + e.getMessage());
         }
     }
 
@@ -133,11 +134,14 @@ public class EcommerceProducer {
             prod.put("fecha_publicacion",fecha); prod.put("marca",marca);
             prod.put("seccion",seccion); prod.put("precio",precio); prod.put("stock",stock);
             String msg = mapToString(prod);
-            // sólo a topic
             channel.basicPublish(PRODUCTS_TOPIC_EXCHANGE, "producto."+categoria.toLowerCase(), null, msg.getBytes(StandardCharsets.UTF_8));
             log("Producto publicado: " + nombre);
+            // Console log
+            System.out.println(String.format("[Producer] Enviado a exchange '%s' con routingKey 'producto.%s': %s", 
+                PRODUCTS_TOPIC_EXCHANGE, categoria.toLowerCase(), msg));
         } catch (Exception ex) {
             log("Error al publicar producto: "+ex.getMessage());
+            System.err.println("[Producer] Error publishing product: " + ex.getMessage());
         }
     }
 
@@ -150,9 +154,13 @@ public class EcommerceProducer {
         try {
             channel.basicPublish(OFFERS_FANOUT_EXCHANGE, "", null, oferta.getBytes(StandardCharsets.UTF_8));
             log("Oferta enviada: " + oferta);
+            // Console log
+            System.out.println(String.format("[Producer] Enviado a exchange '%s' con routingKey '': %s", 
+                OFFERS_FANOUT_EXCHANGE, oferta));
             txtOffer.setText("");
         } catch (IOException ex) {
             log("Error al publicar oferta: "+ex.getMessage());
+            System.err.println("[Producer] Error publishing offer: " + ex.getMessage());
         }
     }
 
